@@ -30,17 +30,24 @@
 Describe your python module here:
 This module will provide the traditional Hello world example
 """
+from enum import Enum
+from os.path import join
 
+from afm import Plugin
+from afm.objects import AFMImage, SetOfAFMmovies
+from motioncorr.convert import parseMovieAlignment2
 from pyworkflow.constants import BETA
-from motioncorr.protocols.protocol_motioncorr import ProtMotionCorr
-from xmipp3.protocols.protocol_flexalign import XmippProtFlexAlign
-
 from pwem.objects.data import Micrograph
 import pyworkflow.protocol.params as params
 import pyworkflow.utils as pwutils
 import pyworkflow.protocol.constants as cons
-from pwem.protocols import ProtAlignMovies
 from pwem.protocols import EMProtocol
+from pyworkflow.object import Set
+from pyworkflow.utils import makePath
+
+
+class AfmMCOutputs(Enum):
+    afmMovies = SetOfAFMmovies
 
 
 class ProtMotionCorAFMmovies(EMProtocol):
@@ -49,11 +56,13 @@ class ProtMotionCorAFMmovies(EMProtocol):
     """
     _label = 'motioncor AFM'
     _outputClassName = 'AFMImages'
+    _possibleOutputs = AfmMCOutputs
     _devStatus = BETA
-    '''
+
     def __init__(self, **args):
-        XmippProtFlexAlign.__init__(self, **args)
-    '''
+        super().__init__(**args)
+        self.inMovies = None
+
 
     def _defineParams(self, form):
         form.addSection(label=pwutils.Message.LABEL_INPUT)
@@ -93,101 +102,60 @@ class ProtMotionCorAFMmovies(EMProtocol):
                            "aligned micrograph the PSD using EMAN2.")
 
     def _insertAllSteps(self):
-        self._insertFunctionStep(self.movieAlignmentStep)
-        self._insertFunctionStep(self.createOutputStep)
+        self.inMovies = self.inputMovies.get()
+        for movie in self.inMovies.iterItems():
+            objId = movie.getObjId()
+            self._insertFunctionStep(self.movieAlignmentStep, objId)
+            self._insertFunctionStep(self.createOutputStep, objId)
+        self._insertFunctionStep(self._closeOutputSet)
 
-    def movieAlignmentStep(self):
-        import os
-        inputMovies = self.inputMovies.get()
-        print(inputMovies)
+    def movieAlignmentStep(self, objId: int):
+        movie = self._getCurrentMovie(objId)
+        movieFolder = self._getTmpPath('movie_%06d' % movie.getObjId())
+        makePath(movieFolder)
 
-        for movie in inputMovies.iterItems():
-            movieFolder = self._getTmpPath('movie_%06d' % movie.getObjId())
+        frame0, frameN = self.alignFrame0.get(), self.alignFrameN.get()
+        args =  ' -InTiff %s ' % movie.getFileName()
+        args += ' -Throw %i ' % (frame0 - 1)
+        args += ' -Trunc  %i ' % 0
+        args += ' -Patch %i %i' %(5, 5)
+        args += ' -MaskCent %i %i' % (0, 0)
+        args += ' -MaskSize %i %i' % (1, 1)
+        args += ' -FtBin %f'  % self.binFactor.get()
+        args += ' -Tol %f ' % 0.20
+        args += ' -PixSize %f' % movie.getSamplingRate()
+        args += ' -kV %f' % 0
+        args += ' -Cs %f' % 0
+        args += ' -OutStack %i' % (1 if self.doSaveMovie else 0)
+        args += ' -Gpu %i' % 0
+        args += ' -SumRange %f %f ' % (0.0, 0.0)
+        args += ' -LogDir %s ' % movieFolder
+        args += ' -OutMrc %s ' % self._getExtraPath('mic_aligned_%06d.mrc' % movie.getObjId())
 
-            if not os.path.exists(movieFolder):
-                os.mkdir(movieFolder)
-            #outputMicFn = self._getOutputMicName(movie)
+        program = Plugin.getAfmMotioncorrProgram()
+        self.runJob(program, args)
 
-            frame0, frameN = self.alignFrame0.get(), self.alignFrameN.get()
-            _, numbOfFrames, _ = inputMovies.getFramesRange()
-            if not numbOfFrames:
-                numbOfFrames = inputMovies.getFirstItem().getDim()[2]
+        # Move output log to extra dir
+        movieLog = self._getMovieLogFile(movie)
+        logFn = join(movieFolder, movieLog)
+        logFnExtra = self._getExtraPath(movieLog)
+        pwutils.moveFile(logFn, logFnExtra)
 
-            args =  ' -InTiff %s ' % movie.getFileName()
-            args += ' -Throw %i ' % (frame0 - 1)
-            args += ' -Trunc  %i ' % 0
-            args += ' -Patch %i %i' %(5, 5)
-            args += ' -MaskCent %i %i' % (0, 0)
-            args += ' -MaskSize %i %i' % (1, 1)
-            args += ' -FtBin %f'  % self.binFactor.get()
-            args += ' -Tol %f ' % 0.20
-            args += ' -PixSize %f' % inputMovies.getSamplingRate()
-            args += ' -kV %f' % 0
-            args += ' -Cs %f' % 0
-            args += ' -OutStack %i' % (1 if self.doSaveMovie else 0)
-            args += ' -Gpu %i' % 0
-            args += ' -SumRange %f %f ' % (0.0, 0.0)
-            args += ' -LogDir %s ' % './'
-            args += ' -OutMrc %s ' % self._getExtraPath('mic_aligned_%06d.mrc' % movie.getObjId())
+    def createOutputStep(self, objId: int):
+        micSet = getattr(self, self._possibleOutputs.afmMovies.name, None)
+        if micSet:
+            micSet.enableAppend()
+        else:
+            micSet = self._createSetOfMicrographs()
+            micSet.setSamplingRate(self.inMovies.getSamplingRate())
+            micSet.setStreamState(Set.STREAM_OPEN)
+            self._defineOutputs(**{self._possibleOutputs.afmMovies.name: micSet})
+            self._defineSourceRelation(self.inputMovies, micSet)
 
-            program = '/home/vilas/software/software/em/motioncor3-1.1.2/bin/MotionCor3_1.1.2_Cuda118_06-11-2024'
-            '''
-            argsDict['-OutMrc'] = f'"{outputMicFn}"'
-
-            args = self._getInputFormat(movie.getFileName())
-            args += ' '.join(['%s %s' % (k, v)
-                              for k, v in argsDict.items()])
-            args += ' ' + self.extraParams2.get()
-            '''
-            print(args)
-            self.runJob(program, args)
-
-
-    def createOutputStep(self):
-
-        micSet = self._createSetOfMicrographs()
-        inputMovies = self.inputMovies.get()
-        for movie in inputMovies.iterItems():
-
-            outputMic = self._getExtraPath('mic_aligned_%06d.mrc' % movie.getObjId())
-
-            micSet.append(Micrograph(outputMic))
-        #micSet.copyInfo(self._getInputMicrographs())
-
-        micSet.setSamplingRate(self.inputMovies.get().getSamplingRate())
-        self._defineOutputs(micSet=micSet)
-        self._defineSourceRelation(self.inputMovies, micSet)
-
-    '''
-    def _insertFinalSteps(self, a= None):
-        return True
-
-    def processMovieStep(self, a, b):
-        import os
-        import shutil
-        import time
-
-        time.sleep(10)
-
-        path = '/home/vilas/Downloads/'
-        fn = 'afmExample_aligned_mic.mrc'
-
-        # Source path
-        source = "/home/vilas/Downloads"
-        originPath = os.path.join(source, fn)
-
-        # Destination path
-        destination = self._getExtraPath(fn)
-
-        dest = shutil.copyfile(originPath, destination)
-        print(dest)
-        f = open(self._getExtraPath('DONE', 'all.TXT'), "a")
-        f.write("done")
-        f.close()
-
-
-
-    '''
+        movie = self._getCurrentMovie(objId)
+        xshifts, yshifts = parseMovieAlignment2(self._getMovieLogFile(movie))
+        outputMic = self._getExtraPath('mic_aligned_%06d.mrc' % movie.getObjId())
+        micSet.append(Micrograph(outputMic))
 
     # --------------------------- INFO functions -----------------------------------
     def _validate(self):
@@ -202,3 +170,11 @@ class ProtMotionCorAFMmovies(EMProtocol):
     def _methods(self):
         methods = []
         return methods
+
+    # --------------------------- UTILS functions -----------------------------------
+    def _getCurrentMovie(self, objId: int) -> AFMImage:
+        return self.inMovies.getItem('_objId', objId)
+
+    @staticmethod
+    def _getMovieLogFile(movie: AFMImage):
+        return '%s-Patch-Full.log' % pwutils.removeBaseExt(movie.getFileName())

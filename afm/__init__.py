@@ -25,9 +25,10 @@
 # **************************************************************************
 
 import os
+from os.path import join
+from motioncorr import V1_1_2
 import pyworkflow.utils as pwutils
 import pwem
-
 from .constants import *
 
 __version__ = "0.1"  # plugin version
@@ -36,13 +37,22 @@ _references = ['you2019']
 
 
 class Plugin(pwem.Plugin):
+    _homeVar = AFM_HOME
+    _pathVars = [AFM_HOME, AFM_MOTIONCOR_HOME, AFM_MOTIONCOR_CUDA_LIB]
     _url = "https://github.com/scipion-em/scipion-afm"
     _supportedVersions = [V1]  # binary version
 
     @classmethod
     def _defineVariables(cls):
         cls._defineVar(AFM_BINARY, "program")
-        cls._defineEmVar(AFM_HOME, f"myplugin-{V1}")
+        cls._defineEmVar(AFM_HOME, f"afm-{V1}")
+        cls._defineVar(AFM_MOTIONCOR_CUDA_LIB, pwem.Config.CUDA_LIB)
+        cudaVersion = cls.guessCudaVersion(AFM_MOTIONCOR_CUDA_LIB,
+                                           default="12.1")
+        cls._defineEmVar(AFM_MOTIONCOR_HOME, f'motioncor3-{V1_1_2}')
+        cls._defineVar(AFM_MOTIONCOR_BIN, 'MotionCor3_1.1.2_Cuda%s%s_06-11-2024' % (
+            cudaVersion.major, cudaVersion.minor))
+
 
     @classmethod
     def getEnviron(cls):
@@ -68,3 +78,7 @@ class Plugin(pwem.Plugin):
                        commands=installCmds,
                        neededProgs=cls.getDependencies(),
                        default=True)
+
+    @classmethod
+    def getAfmMotioncorrProgram(cls):
+        return join(cls.getVar(AFM_MOTIONCOR_HOME), 'bin', cls.getVar(AFM_MOTIONCOR_BIN))

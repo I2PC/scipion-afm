@@ -23,14 +23,11 @@
 # *  e-mail address 'scipion@cnb.csic.es'
 # *
 # **************************************************************************
-
-import pwem.emlib.metadata as md
 import pyworkflow.utils as pwutils
 from pyworkflow.object import Integer
-from pyworkflow.protocol.constants import LEVEL_ADVANCED)
+from pyworkflow.protocol.constants import LEVEL_ADVANCED
 import pyworkflow.protocol.params as params
 from pwem.protocols import ProtExtractParticles
-from pwem.objects import Particle
 
 
 class ProtExtractAFMParticles(ProtExtractParticles):
