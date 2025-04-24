@@ -137,7 +137,7 @@ class ProtImportAFMmovies(EMProtocol):
             outputSetOfAFMmovies.append(movie)
             outputSetOfAFMmovies.update(movie)
 
-        self._defineOutputs(outputSetOfTiltSeries=outputSetOfAFMmovies)
+        self._defineOutputs(AFMmovies=outputSetOfAFMmovies)
 
     # --------------------------- INFO functions -----------------------------------
     def _validate(self):

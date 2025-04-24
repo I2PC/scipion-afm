@@ -34,7 +34,7 @@ from enum import Enum
 from os.path import join
 
 from afm import Plugin
-from afm.objects import AFMImage, SetOfAFMmovies
+from afm.objects import AFMImage, SetOfAFMmovies, SetOfAFMImages
 from motioncorr.convert import parseMovieAlignment2
 from pyworkflow.constants import BETA
 from pwem.objects.data import Micrograph
@@ -42,12 +42,12 @@ import pyworkflow.protocol.params as params
 import pyworkflow.utils as pwutils
 import pyworkflow.protocol.constants as cons
 from pwem.protocols import EMProtocol
-from pyworkflow.object import Set
+from pyworkflow.object import Set, String
 from pyworkflow.utils import makePath
 
 
 class AfmMCOutputs(Enum):
-    afmMovies = SetOfAFMmovies
+    afmImages = SetOfAFMImages
 
 
 class ProtMotionCorAFMmovies(EMProtocol):
@@ -142,20 +142,26 @@ class ProtMotionCorAFMmovies(EMProtocol):
         pwutils.moveFile(logFn, logFnExtra)
 
     def createOutputStep(self, objId: int):
-        micSet = getattr(self, self._possibleOutputs.afmMovies.name, None)
-        if micSet:
-            micSet.enableAppend()
+        afmImageSet = getattr(self, self._possibleOutputs.afmImages.name, None)
+
+        if afmImageSet:
+            afmImageSet.enableAppend()
         else:
-            micSet = self._createSetOfMicrographs()
-            micSet.setSamplingRate(self.inMovies.getSamplingRate())
-            micSet.setStreamState(Set.STREAM_OPEN)
-            self._defineOutputs(**{self._possibleOutputs.afmMovies.name: micSet})
-            self._defineSourceRelation(self.inputMovies, micSet)
+            afmImageSet = SetOfAFMImages.create(self._getPath(), template='afmImages%s.sqlite')
+            afmImageSet.copyInfo(self.inputMovies.get())
+            afmImageSet.setAFMAcquisition(self.inputMovies.get().getAFMAcquisition())
+            afmImageSet.setStreamState(Set.STREAM_OPEN)
+            self._defineOutputs(**{self._possibleOutputs.afmImages.name: afmImageSet})
+            self._defineSourceRelation(self.inputMovies, afmImageSet)
 
         movie = self._getCurrentMovie(objId)
-        xshifts, yshifts = parseMovieAlignment2(self._getMovieLogFile(movie))
+        shiftFile = self._getExtraPath(self._getMovieLogFile(movie))
+
         outputMic = self._getExtraPath('mic_aligned_%06d.mrc' % movie.getObjId())
-        micSet.append(Micrograph(outputMic))
+        mic = Micrograph(location=outputMic)
+        mic._movieFile = String(movie.getFileName())
+        mic._shiftFile = String(shiftFile)
+        afmImageSet.append(mic)
 
     # --------------------------- INFO functions -----------------------------------
     def _validate(self):
