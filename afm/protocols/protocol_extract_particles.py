@@ -31,6 +31,9 @@ import pyworkflow.protocol.params as params
 from pwem.protocols import ProtExtractParticles
 from pwem.protocols import EMProtocol
 from afm.objects import AFMImage, SetOfAFMmovies, SetOfAFMImages
+import mrcfile
+import numpy as np
+from pwem import emlib
 
 
 class ProtExtractAFMParticles(EMProtocol):
@@ -40,8 +43,10 @@ class ProtExtractAFMParticles(EMProtocol):
 
     def __init__(self, **args):
         super().__init__(**args)
+        # self.coordDict = None
+        self.micDict = None
 
-    #--------------------------- DEFINE param functions ------------------------
+        #--------------------------- DEFINE param functions ------------------------
     def _defineParams(self, form):
 
         form.addSection(label=pwutils.Message.LABEL_INPUT)
@@ -132,17 +137,25 @@ class ProtExtractAFMParticles(EMProtocol):
 
     #--------------------------- INSERT steps functions ------------------------
     def _insertAllSteps(self):
-        inCoords = self.inputCoordinates.get()
-        print(self.inputAFMs.get())
-        mics = inCoords.getMicrographs()
-        for mic in mics:
-            coordList = [coord.clone() for coord in inCoords.iterCoordinates(micrograph = mic)]
-            self._insertFunctionStep(self.extractParticlesStep, coordList, mic, self.inputAFMs.get()[mic.getObjId()])
+        # inCoords = self.inputCoordinates.get()
+        # print(self.inputAFMs.get())
+        # mics = inCoords.getMicrographs()
+        self._initialize()
+        for micId, mic in self.micDict.items():
+            # self.coordDict = {mic.getObjId: coord.clone() for coord in inCoords.iterCoordinates(micrograph = mic)}
+            self._insertFunctionStep(self.extractParticlesStep, micId)
 
-    def extractParticlesStep(self, coordList, mic, afmImg):
-        import mrcfile
+        self._insertFunctionStep(self.createOutputStep)
+
+    def _initialize(self):
+        inCoords = self.inputCoordinates.get()
+        self.micDict = {mic.getObjId(): mic.clone() for mic in inCoords.getMicrographs()}
+
+    def extractParticlesStep(self, micId: int):
         boxsize = self.boxSize.get()
         halfboxsize = boxsize // 2
+        afmImg = self.micDict[micId]
+        inCoords = self.inputCoordinates.get()
 
         shiftFile = str(afmImg._shiftFile)
         movieFile = str(afmImg._movieFile)
@@ -150,20 +163,44 @@ class ProtExtractAFMParticles(EMProtocol):
         print(self.parseMovieAlignment2(shiftFile)[1])
         print(movieFile)
 
-        with mrcfile.open(mic.getFileName()) as mrc:
+        with mrcfile.open(afmImg.getFileName()) as mrc:
             numpyMic = mrc.data
 
         dims = numpyMic.shape
 
-        
-        for m in
-        for c in coordList:
-            print(c.getX())
+        particleStackFile = self._getExtraPath(f'particles_{micId}.mrc')
+        nParticles = len(list(inCoords.iterCoordinates(micrograph = micId)))
+        with mrcfile.new(particleStackFile, overwrite=True) as mrc:
+            mrc.set_data(np.zeros((nParticles, boxsize, boxsize), dtype=np.float32))
+
+        mdParticles = emlib.MetaData()
+        particleCounter = 0
+        for c in inCoords.iterCoordinates(micrograph = micId):
             xpos = c.getX()
             ypos = c.getY()
-            print(xpos, ypos, halfboxsize)
             if self.validCoordinate(xpos, ypos, halfboxsize, dims):
-                particle = self.extract(halfboxsize, numpyMic, xpos, ypos)
+                croppedImg = self.extract(halfboxsize, numpyMic, xpos, ypos)
+                with mrcfile.open(particleStackFile, mode='r+') as mrc:
+                    data = mrc.data
+                    data[particleCounter, :, :] = croppedImg
+                    mrc.set_data(data)
+                    particleCounter += 1
+                mdObjId = mdParticles.addObject()
+                fnParticle = f'{particleCounter}@'+particleStackFile
+                mdParticles.setValue(emlib.MDL_IMAGE, fnParticle, mdObjId)
+
+        mdParticles.write(self._getExtraPath(f"particles_{micId}.xmd"))
+
+
+
+    def createOutputStep(self):
+        outputSet = self.__createSet(emobj.SetOfParticles, 'particles%s.sqlite', suffix, indexes=['_classId', '_micId'])
+        outputSet.copyInfo(inCoords)
+        self.iterMd = md.iterRows(imgFn, md.MDL_ITEM_ID)
+        self.lastRow = next(self.iterMd)
+        outputSet.copyItems(imgSet, updateItemCallback=self._updateItem)
+        self._defineOutputs(outputParticles=outputSet)
+        self._defineSourceRelation(self.inputSet, outputSet)
 
     def extract(self, halfboxsize, img, x, y):
         particle = img[x-halfboxsize:x+halfboxsize, y-halfboxsize:y+halfboxsize]

@@ -52,7 +52,7 @@ class ProtManualPickingAFM(XmippProtParticlePicking):
 
     def _defineParams(self, form):
         form.addSection(label='Input')
-        form.addParam('inputAFMImages', params.PointerParam,
+        form.addParam('inputMicrographs', params.PointerParam,
                       pointerClass='SetOfAFMImages',
                       label='Set of AFM Images', important=True,
                       help='Select the SetOfAFMImages to be used during '
@@ -63,7 +63,7 @@ class ProtManualPickingAFM(XmippProtParticlePicking):
         """The Particle Picking process is realized for a set of micrographs"""
         # Get pointer to input micrographs
 
-        self.afmImages = self.inputAFMImages.get()
+        self.afmImages = self.inputMicrographs.get()
         micFn = self.afmImages.getFileName()
 
         # Launch Particle Picking GUI
@@ -77,7 +77,7 @@ class ProtManualPickingAFM(XmippProtParticlePicking):
 
     # --------------------------- INFO functions -----------------------------------
     def getInputMicrographs(self):
-        return self.inputAFMImages.get()
+        return self.inputMicrographs.get()
 
 
     def _validate(self):
